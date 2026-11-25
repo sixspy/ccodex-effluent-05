@@ -11,6 +11,47 @@ from validators import validate_permit_match
 router = APIRouter(tags=["reconcile"])
 
 
+def _no_permit_batches(conn) -> list[dict]:
+    """许可册无匹配行的正式批（无许可批）。对账流量累计必须剔除它们。"""
+    rows = conn.execute(
+        """SELECT s.sample_code, s.permit_ref, s.flow_m3h, s.status, s.generation,
+                  s.created_at, o.outfall_code
+           FROM sample_batches s
+           LEFT JOIN discharge_permits p ON p.permit_code = s.permit_ref
+           LEFT JOIN outfalls o ON o.id = s.outfall_id
+           WHERE p.id IS NULL AND s.status != '作废'
+           ORDER BY s.id""",
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _flow_summary(conn) -> dict:
+    no_permit = _no_permit_batches(conn)
+    excluded_flow = sum(float(x["flow_m3h"] or 0.0) for x in no_permit)
+    counted = conn.execute(
+        """SELECT COALESCE(SUM(s.flow_m3h),0) v, COUNT(*) c
+           FROM sample_batches s
+           JOIN discharge_permits p ON p.permit_code = s.permit_ref
+           WHERE s.status != '作废'"""
+    ).fetchone()
+    formal = conn.execute(
+        "SELECT COUNT(*) c FROM sample_batches WHERE status != '作废'"
+    ).fetchone()["c"]
+    counted_flow = float(counted["v"])
+    return {
+        "formal_batch_count": formal,
+        "counted_batch_count": int(counted["c"]),
+        "excluded_no_permit_count": len(no_permit),
+        "counted_flow_m3h": counted_flow,
+        "total_flow_m3h": counted_flow,
+        "included_flow_m3h": counted_flow,
+        "excluded_no_permit_flow_m3h": excluded_flow,
+        "no_permit_flow_m3h": excluded_flow,
+        "flow_unit": "m3/h",
+        "rule": "对账流量累计只计许可册有匹配行的正式批；无许可批剔除并列入 excluded_no_permit",
+    }
+
+
 @router.get("/api/reconcile")
 def reconcile_all(authorization: AuthHeader = None):
     require_user(authorization)
@@ -20,7 +61,36 @@ def reconcile_all(authorization: AuthHeader = None):
         rows = conn.execute(
             "SELECT permit_code FROM discharge_permits ORDER BY permit_code"
         ).fetchall()
-        return {"items": [_reconcile_permit(conn, r["permit_code"]) for r in rows]}
+        items = [_reconcile_permit(conn, r["permit_code"]) for r in rows]
+        unmatched = _no_permit_batches(conn)
+        summary = _flow_summary(conn)
+        return {
+            "items": items,
+            "summary": summary,
+            "unmatched": unmatched,
+            "excluded_no_permit": unmatched,
+            # 顶层别名，便于对账页直接绑定“累计（已剔除无许可）流量”
+            "total_flow_m3h": summary["counted_flow_m3h"],
+            "counted_flow_m3h": summary["counted_flow_m3h"],
+            "excluded_no_permit_flow_m3h": summary["excluded_no_permit_flow_m3h"],
+        }
+
+
+@router.get("/api/reconcile/no-permit")
+def reconcile_no_permit(authorization: AuthHeader = None):
+    """无许可批剔除明细（必须定义在 /api/reconcile/{permit_code} 之前）。"""
+    require_user(authorization)
+    from db import connect
+
+    with connect() as conn:
+        items = _no_permit_batches(conn)
+        total = sum(float(x["flow_m3h"] or 0.0) for x in items)
+        return {
+            "items": items,
+            "count": len(items),
+            "flow_m3h_total": total,
+            "rule": "这些批许可册无匹配行，已从对账流量累计剔除（effluent-05 乙）",
+        }
 
 
 @router.get("/api/reconcile/{permit_code}")
@@ -89,6 +159,8 @@ def _reconcile_permit(conn, permit_code: str) -> dict:
         "balanced": all_ok,
         "proof_ready": all_ok and len(seal_rows) >= 1,
         "seal_count": len(seal_rows),
+        "sample_count": len(details),
+        "flow_total_m3h": sum(float(d["flow_m3h"] or 0.0) for d in details),
         "samples": details,
         "seals": [dict(x) for x in seal_rows],
     }

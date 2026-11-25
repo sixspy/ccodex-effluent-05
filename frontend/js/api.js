@@ -13,7 +13,14 @@ export function createApi(getToken, onUnauthorized) {
     try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
     if (!res.ok) {
       const detail = data && (data.detail || data.message);
-      throw new Error(typeof detail === "string" ? detail : ("请求失败 " + res.status));
+      let msg;
+      if (typeof detail === "string") msg = detail;
+      else if (detail && typeof detail === "object") msg = detail.message || detail.detail || JSON.stringify(detail);
+      else msg = "请求失败 " + res.status;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.payload = data;
+      throw err;
     }
     return data;
   }
@@ -26,6 +33,7 @@ export function createApi(getToken, onUnauthorized) {
     createPlant: (body) => request("/api/plants", { method: "POST", body: JSON.stringify(body) }),
     outfalls: () => request("/api/outfalls"),
     outfall: (id) => request("/api/outfalls/" + id),
+    outfallFormalSamples: (id) => request("/api/outfalls/" + id + "/formal-samples"),
     createOutfall: (body) => request("/api/outfalls", { method: "POST", body: JSON.stringify(body) }),
     setOutfallStatus: (id, status) => request("/api/outfalls/" + id + "/status?status=" + encodeURIComponent(status), { method: "POST" }),
     samples: (status) => request("/api/samples" + (status ? ("?status=" + encodeURIComponent(status)) : "")),
@@ -40,10 +48,12 @@ export function createApi(getToken, onUnauthorized) {
     createSeal: (body) => request("/api/seals", { method: "POST", body: JSON.stringify(body) }),
     permits: () => request("/api/permits"),
     permit: (code) => request("/api/permits/" + encodeURIComponent(code)),
+    permitInterceptions: () => request("/api/permits/interceptions"),
     createPermit: (body) => request("/api/permits", { method: "POST", body: JSON.stringify(body) }),
     lineage: () => request("/api/lineage"),
     createLineage: (body) => request("/api/lineage", { method: "POST", body: JSON.stringify(body) }),
     reconcile: () => request("/api/reconcile"),
+    reconcileNoPermit: () => request("/api/reconcile/no-permit"),
     reconcileOne: (code) => request("/api/reconcile/" + encodeURIComponent(code)),
     proof: (code) => request("/api/proof/sample/" + encodeURIComponent(code)),
     labJobs: () => request("/api/stubs/lab-courier"),

@@ -21,6 +21,36 @@ from validators import (
 router = APIRouter(tags=["samples"])
 
 
+def _record_permit_block(
+    conn,
+    permit_ref: str,
+    user: str,
+    body: "SampleIn",
+    block_kind: str = "无许可禁建",
+    source: str = "POST /api/samples",
+) -> None:
+    """登记一次无许可禁建/偏航拦截，总览计数与许可页拦截痕同源此表。"""
+    conn.execute(
+        """INSERT INTO permit_block_log(permit_ref,source,block_kind,actor,detail,created_at)
+           VALUES (?,?,?,?,?,?)""",
+        (
+            permit_ref,
+            source,
+            block_kind,
+            user,
+            json.dumps(
+                {
+                    "outfall_id": body.outfall_id,
+                    "sample_code": body.sample_code,
+                    "deviation_note": body.deviation_note,
+                },
+                ensure_ascii=False,
+            ),
+            now_iso(),
+        ),
+    )
+
+
 def _next_sample_code(conn, outfall_id: int) -> str:
     outfall = conn.execute(
         "SELECT outfall_code FROM outfalls WHERE id=?", (outfall_id,)
@@ -36,7 +66,10 @@ def _next_sample_code(conn, outfall_id: int) -> str:
 def list_samples(authorization: AuthHeader = None, status: str | None = None):
     require_user(authorization)
     with connect() as conn:
-        q = """SELECT s.*, o.outfall_code, p.plant_code FROM sample_batches s
+        q = """SELECT s.*, o.outfall_code, p.plant_code,
+                      EXISTS(SELECT 1 FROM discharge_permits dp
+                             WHERE dp.permit_code=s.permit_ref) AS permit_matched
+               FROM sample_batches s
                JOIN outfalls o ON o.id=s.outfall_id
                JOIN plants p ON p.id=o.plant_id"""
         if status:
@@ -48,6 +81,7 @@ def list_samples(authorization: AuthHeader = None, status: str | None = None):
         items = []
         for r in rows:
             d = dict(r)
+            d["permit_matched"] = bool(d.get("permit_matched"))
             d["metrics"] = json.loads(d["metrics"] or "{}")
             items.append(d)
         return {"items": items}
@@ -93,10 +127,33 @@ def get_sample(sample_id: int, authorization: AuthHeader = None):
 @router.post("/api/samples")
 def create_sample(body: SampleIn, authorization: AuthHeader = None):
     user = require_writer(authorization)
-    lock_key = f"outfall:{body.outfall_id}"
+    # effluent-05：同许可号抢建必须占许可锁（跨排放口也互斥）；outfall 锁只护编号生成。
+    permit_lock_key = f"permit:{body.permit_ref}"
+    outfall_lock_key = f"outfall:{body.outfall_id}"
     with connect() as conn:
-        require_lock(conn, lock_key, user)
+        # 偏航闸：任何要求“无许可先放行/影子第三路”的偏离说明，记 无许可禁建偏航 并拒写。
+        if body.allow_no_permit or (body.deviation_note or "").strip():
+            _record_permit_block(conn, body.permit_ref, user, body, "无许可禁建偏航")
+            write_audit(
+                conn,
+                user,
+                "sample_blocked_pianhang",
+                body.permit_ref,
+                {"deviation_note": body.deviation_note, "allow_no_permit": body.allow_no_permit},
+            )
+            conn.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "无许可禁建偏航：DP-E55 类空匹配不开影子/第三路，"
+                    "已记 无许可禁建偏航 并拒写"
+                ),
+                headers={"X-Effluent-Permit-Block": "pianhang"},
+            )
         try:
+            # 许可锁先于业务校验，保证 DP-E55 空匹配的两路并发也按同号互斥、后到留争用痕。
+            require_lock(conn, permit_lock_key, user)
+            require_lock(conn, outfall_lock_key, user)
             outfall = conn.execute(
                 """SELECT o.*, p.status plant_status, p.design_cap_m3d
                    FROM outfalls o JOIN plants p ON p.id=o.plant_id WHERE o.id=?""",
@@ -114,7 +171,24 @@ def create_sample(body: SampleIn, authorization: AuthHeader = None):
                 (body.permit_ref,),
             ).fetchone()
             if not permit:
-                raise HTTPException(400, "排放许可不存在")
+                # 甲路径：许可册无匹配行 → 采样正式册零增并拒收。
+                _record_permit_block(conn, body.permit_ref, user, body)
+                write_audit(
+                    conn,
+                    user,
+                    "sample_blocked_no_permit",
+                    body.permit_ref,
+                    {"sample_code": body.sample_code, "outfall_id": body.outfall_id},
+                )
+                conn.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"无许可禁建：许可册无 {body.permit_ref} 匹配行，"
+                        "采样正式册零增并拒收（effluent-05 甲路径）"
+                    ),
+                    headers={"X-Effluent-Permit-Block": "no_permit"},
+                )
             if permit["status"] != "有效":
                 raise HTTPException(400, "排放许可未生效")
             exceeded, metric, measured, limit = adjudicate_exceed(
@@ -178,6 +252,7 @@ def create_sample(body: SampleIn, authorization: AuthHeader = None):
                     "metrics": metrics,
                     "summary": metric_summary(metrics),
                     "exceed": exceeded,
+                    "permit_lock": permit_lock_key,
                 },
             )
             conn.commit()
@@ -187,7 +262,9 @@ def create_sample(body: SampleIn, authorization: AuthHeader = None):
                 "status": status,
                 "exceed": exceeded,
                 "hold_key": hold,
+                "permit_lock_key": permit_lock_key,
             }
         finally:
-            release(conn, lock_key, user)
+            release(conn, permit_lock_key, user)
+            release(conn, outfall_lock_key, user)
             conn.commit()

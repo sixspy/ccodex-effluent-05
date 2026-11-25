@@ -1,0 +1,15 @@
+{
+  "case": "effluent-05",
+  "slot": "排污戊第5槽",
+  "rule": "无许可禁建（甲路径）：许可册无匹配行则采样正式册零增并拒收",
+  "missing_permit_code": "DP-E55",
+  "preset_batch_code": "SM-E55",
+  "outfall_code": "OF-E1-A",
+  "flow_m3h": 555.0,
+  "formal_book_expected_increment": 0,
+  "permit_book_fixture": "fixtures/permits.json",
+  "note": "DP-E55 刻意不写入 permits.json；SM-E55 作为无许可预置批写入 samples.json，种子盲插即入库假绿。三红先见，再分服务救绿。",
+  "sessions": ["writer", "admin"],
+  "lock_key": "permit:DP-E55",
+  "concurrency_script": "scripts/ping_permit_lock.py"
+}

@@ -21,6 +21,23 @@ def list_permits(authorization: AuthHeader = None):
         return {"items": [dict(r) for r in rows]}
 
 
+@router.get("/api/permits/interceptions")
+def list_interceptions(authorization: AuthHeader = None, limit: int = 100):
+    """无许可禁建拦截痕（许可页同源）。必须注册在 /{permit_code} 之前以免被吞。"""
+    require_user(authorization)
+    limit = max(1, min(int(limit), 500))
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM permit_block_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        blocked_count = conn.execute(
+            "SELECT COUNT(*) c FROM permit_block_log WHERE block_kind=?",
+            ("无许可禁建",),
+        ).fetchone()["c"]
+        return {"items": items, "blocked_count": blocked_count}
+
+
 @router.get("/api/permits/{permit_code}")
 def get_permit(permit_code: str, authorization: AuthHeader = None):
     require_user(authorization)

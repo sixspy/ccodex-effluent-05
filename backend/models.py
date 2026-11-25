@@ -34,6 +34,10 @@ class SampleIn(BaseModel):
     metrics: MetricsIn
     flow_m3h: float = Field(gt=0, lt=50000)
     sample_code: str | None = None
+    # effluent-05：任何“无许可先放行/走影子或第三路”的偏离请求都按
+    # “无许可禁建偏航”留痕并拒写，开关本身不构成可绕过的后门。
+    allow_no_permit: bool = False
+    deviation_note: str | None = None
 
 
 class ExceedOpenIn(BaseModel):

@@ -198,3 +198,9 @@ pre {
   max-height: 280px;
   overflow: auto;
 }
+.permit-gate { margin: 0.5rem 0 0; padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: 6px; background: #f7faf8; font-size: 0.85rem; }
+.permit-gate.fail { border-color: var(--danger); background: #f8ecea; font-weight: 600; }
+.permit-gate.pass { border-color: var(--ok); background: #eaf4ee; }
+button:disabled { opacity: 0.45; cursor: not-allowed; filter: grayscale(0.4); }
+tr.orphan-row { background: #fbeeed; }
+tr.orphan-row td { color: var(--danger); }

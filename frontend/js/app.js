@@ -40,9 +40,16 @@ createApp({
     const sampleDetail = ref(null);
     const reconOne = ref(null);
     const reconAllItems = ref([]);
+    const reconSummary = ref(null);
+    const reconExcluded = ref([]);
     const proofOne = ref(null);
     const reconCode = ref("DP-2026-E01");
     const proofCode = ref("SM-OF-E1-A-001");
+    const permitBlocks = ref([]);
+    const permitCheckCode = ref("DP-E55");
+    const permitCheckResult = ref(null);
+    const outfallFormal = ref(null);
+    const outfallFormalOf = ref("");
 
     const plantForm = ref({
       plant_code: "PL-NEW-01", name: "新建净化厂", basin: "试验流域", design_cap_m3d: 20000,
@@ -81,6 +88,15 @@ createApp({
     const sealableSamples = computed(() =>
       samples.value.filter((s) => ["已裁定", "已准排"].includes(s.status))
     );
+    // effluent-05 甲路径：采样页建批键与许可册同源，无匹配行即拒写（前端键闸 + 后端硬闸）。
+    const samplePermitState = computed(() => {
+      const code = (sampleForm.value.permit_ref || "").trim();
+      if (!code) return { matched: false, active: false, label: "请填写许可号" };
+      const p = permits.value.find((x) => x.permit_code === code);
+      if (!p) return { matched: false, active: false, label: `许可册无 ${code} 匹配 · 无许可禁建` };
+      if (p.status !== "有效") return { matched: true, active: false, label: `许可 ${p.status} · 建批拒写` };
+      return { matched: true, active: true, label: `许可在册有效 · ${p.plant_code || ""}` };
+    });
 
     function statusClass(s) {
       if (!s) return "muted";
@@ -135,6 +151,7 @@ createApp({
       releases.value = (await api.releases()).items;
       seals.value = (await api.seals()).items;
       permits.value = (await api.permits()).items;
+      try { permitBlocks.value = (await api.permitInterceptions()).items; } catch { permitBlocks.value = []; }
       lineageEdges.value = (await api.lineage()).items;
       labJobs.value = (await api.labJobs()).items;
       sludgeJobs.value = (await api.sludgeJobs()).items;
@@ -151,6 +168,10 @@ createApp({
     async function createPlant() { await flash(() => api.createPlant(plantForm.value)); }
     async function createOutfall() { await flash(() => api.createOutfall(outfallForm.value)); }
     async function createSample() {
+      if (!samplePermitState.value.active) {
+        actionErr.value = samplePermitState.value.label || "无许可禁建：许可册无匹配行，建批键拒写";
+        return;
+      }
       await flash(() => api.createSample({
         outfall_id: sampleForm.value.outfall_id,
         permit_ref: sampleForm.value.permit_ref,
@@ -181,7 +202,26 @@ createApp({
       }));
     }
     async function loadReconcile() {
-      await flash(async () => { reconAllItems.value = (await api.reconcile()).items; });
+      await flash(async () => {
+        const data = await api.reconcile();
+        reconAllItems.value = data.items;
+        reconSummary.value = data.summary || null;
+        reconExcluded.value = data.excluded_no_permit || data.unmatched || [];
+      });
+    }
+    async function loadOutfallFormal(o) {
+      outfallFormalOf.value = o.outfall_code;
+      const data = await api.outfallFormalSamples(o.id);
+      outfallFormal.value = data;
+    }
+    async function checkPermit() {
+      permitCheckResult.value = null;
+      const code = (permitCheckCode.value || "").trim();
+      try {
+        permitCheckResult.value = { ok: true, ...(await api.permit(code)) };
+      } catch (e) {
+        permitCheckResult.value = { ok: false, code, message: e.message || String(e) };
+      }
     }
     async function loadReconcileOne() {
       await flash(async () => { reconOne.value = await api.reconcileOne(reconCode.value); });
@@ -220,11 +260,14 @@ createApp({
       token, user, username, password, err, actionErr, actionOk, tab, nav,
       dash, plants, outfalls, samples, exceeds, releases, seals, permits,
       lineageEdges, labJobs, sludgeJobs, plantDetail, sampleDetail,
-      reconOne, reconAllItems, proofOne, reconCode, proofCode,
+      reconOne, reconAllItems, reconSummary, reconExcluded, proofOne, reconCode, proofCode,
+      permitBlocks, permitCheckCode, permitCheckResult,
+      outfallFormal, outfallFormalOf,
       plantForm, outfallForm, sampleForm, releaseForm, sealForm, permitForm,
-      lineageForm, labForm, sludgeForm, releasableSamples, sealableSamples,
+      lineageForm, labForm, sludgeForm, releasableSamples, sealableSamples, samplePermitState,
       login, logout, refresh, statusClass, sampleClass, fmtMetrics,
       loadPlant, loadSample, createPlant, createOutfall, createSample,
+      loadOutfallFormal, checkPermit,
       closeExceed, createRelease, createSeal, createPermit, createLineage,
       loadReconcile, loadReconcileOne, loadProof, enqueueLab, enqueueSludge,
     };

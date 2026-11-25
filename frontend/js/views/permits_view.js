@@ -26,4 +26,30 @@ export const permitsViewTemplate = `
       <label>总磷帽</label><input type="number" v-model.number="permitForm.tp_cap"/>
       <div class="actions"><button @click="createPermit">登记</button></div>
     </div>
+    <div class="panel">
+      <h3>许可号匹配核查（无许可禁建）</h3>
+      <p class="muted">许可册查无此号时，采样页建批键拒写、对账剔除其流量、总览拦截加一。</p>
+      <div class="form-row">
+        <div><label>许可号</label><input v-model="permitCheckCode" placeholder="DP-E55"/></div>
+      </div>
+      <div class="actions"><button class="secondary" @click="checkPermit">核查匹配</button></div>
+      <div v-if="permitCheckResult" style="margin-top:0.6rem">
+        <p v-if="permitCheckResult.ok" class="pass">✔ 在册：{{ permitCheckResult.permit_code }} · {{ permitCheckResult.status }}</p>
+        <p v-else class="fail">⛔ 许可册无匹配（{{ permitCheckResult.code }}）：无许可禁建，采样正式册零增并拒收。{{ permitCheckResult.message }}</p>
+      </div>
+    </div>
+    <div class="panel" style="grid-column:1 / -1">
+      <h3>无许可禁建 · 拦截痕（与总览计数/采样拒收同源）</h3>
+      <table>
+        <thead><tr><th>时间</th><th>许可号</th><th>归类</th><th>来源</th><th>操作会话</th></tr></thead>
+        <tbody>
+          <tr v-for="b in permitBlocks" :key="b.id">
+            <td>{{ b.created_at }}</td><td>{{ b.permit_ref }}</td>
+            <td :class="b.block_kind==='无许可禁建偏航' ? 'fail' : 'warn'">{{ b.block_kind }}</td>
+            <td>{{ b.source }}</td><td>{{ b.actor }}</td>
+          </tr>
+          <tr v-if="!permitBlocks.length"><td colspan="5" class="muted">暂无拦截；到采样页用 DP-E55 建批即留痕并计数。</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>`;

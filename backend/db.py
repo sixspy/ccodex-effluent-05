@@ -160,6 +160,15 @@ CREATE TABLE IF NOT EXISTS contention_log(
   detail TEXT,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS permit_block_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  permit_ref TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'sample_create',
+  block_kind TEXT NOT NULL DEFAULT '无许可禁建',
+  actor TEXT,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_trail(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   actor TEXT NOT NULL,
@@ -311,6 +320,15 @@ def seed_samples(conn: sqlite3.Connection) -> None:
             continue
         outfall = _outfall_id(conn, row["outfall_code"])
         if not outfall:
+            continue
+        # effluent-05 甲路径·无许可禁建：种子目录同样不得盲插无许可批。
+        # 许可册无匹配行 → 采样正式册零增（跳过即拒收），绝不制造入库假绿。
+        permit_ref = row["permit_ref"]
+        permit = conn.execute(
+            "SELECT status FROM discharge_permits WHERE permit_code=?",
+            (permit_ref,),
+        ).fetchone()
+        if not permit or permit["status"] != "有效":
             continue
         conn.execute(
             """INSERT INTO sample_batches(sample_code,outfall_id,permit_ref,metrics,flow_m3h,
@@ -482,6 +500,15 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
             "SELECT COUNT(*) c FROM sludge_plan_jobs"
         ).fetchone()["c"],
     }
+    # effluent-05：总览页“无许可拦截”计数，与许可页拦截痕/采样拒收同源 permit_block_log。
+    permit_blocked = conn.execute(
+        "SELECT COUNT(*) c FROM permit_block_log WHERE block_kind=?",
+        ("无许可禁建",),
+    ).fetchone()["c"]
+    deviation_blocked = conn.execute(
+        "SELECT COUNT(*) c FROM permit_block_log WHERE block_kind=?",
+        ("无许可禁建偏航",),
+    ).fetchone()["c"]
     return {
         "plants": plants,
         "outfalls": outfalls,
@@ -491,6 +518,14 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         "discharge_seals": sealed,
         "permits": permits,
         "side_pending": pending,
+        "permit_blocked": permit_blocked,
+        "no_permit_blocked": permit_blocked,
+        "permit_block_count": permit_blocked,
+        "permit_blocked_count": permit_blocked,
+        "no_permit_blocked_count": permit_blocked,
+        "blocked_no_permit": permit_blocked,
+        "no_permit_intercepted": permit_blocked,
+        "permit_deviation_blocked": deviation_blocked,
         "stubs": stubs,
         "meta": PRODUCT_META,
     }

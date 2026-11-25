@@ -5,8 +5,10 @@ export const samplesViewTemplate = `
       <table>
         <thead><tr><th>编号</th><th>口</th><th>许可</th><th>流量</th><th>状态</th><th>代</th></tr></thead>
         <tbody>
-          <tr v-for="s in samples" :key="s.id" @click="loadSample(s.id)" style="cursor:pointer">
-            <td>{{ s.sample_code }}</td><td>{{ s.outfall_code }}</td><td>{{ s.permit_ref }}</td>
+          <tr v-for="s in samples" :key="s.id" @click="loadSample(s.id)" style="cursor:pointer"
+              :class="{'orphan-row': s.permit_matched === false}">
+            <td>{{ s.sample_code }}</td><td>{{ s.outfall_code }}</td>
+            <td>{{ s.permit_ref }}<span v-if="s.permit_matched === false" class="metric-chip over">无许可·不入正式批</span></td>
             <td>{{ s.flow_m3h }}</td><td :class="sampleClass(s.status)">{{ s.status }}</td>
             <td>{{ s.generation }}</td>
           </tr>
@@ -35,6 +37,13 @@ export const samplesViewTemplate = `
         <div><label>流量 m3/h</label><input type="number" v-model.number="sampleForm.flow_m3h"/></div>
       </div>
       <label>编号（可空自动）</label><input v-model="sampleForm.sample_code"/>
-      <div class="actions"><button @click="createSample">入库</button></div>
+      <p class="permit-gate" :class="samplePermitState.active ? 'pass' : 'fail'">
+        {{ samplePermitState.active ? "✔ " + samplePermitState.label : "⛔ " + samplePermitState.label + "（建批键拒写·甲路径）" }}
+      </p>
+      <div class="actions">
+        <button @click="createSample" :disabled="!samplePermitState.active"
+                :title="samplePermitState.label">入库</button>
+        <span v-if="!samplePermitState.active" class="muted">许可册无匹配，建批键已封；不是提示条，后端同闸拒收并计拦截</span>
+      </div>
     </div>
   </div>`;

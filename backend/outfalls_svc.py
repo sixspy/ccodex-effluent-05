@@ -39,12 +39,55 @@ def get_outfall(outfall_id: int, authorization: AuthHeader = None):
         ).fetchone()
         if not row:
             raise HTTPException(404, "排放口不存在")
-        recent = conn.execute(
-            """SELECT sample_code, status, flow_m3h, created_at FROM sample_batches
-               WHERE outfall_id=? ORDER BY id DESC LIMIT 10""",
+        # effluent-05：排放口页“正式批列表”与许可册同源，INNER JOIN 许可册，
+        # 无许可匹配行的孤儿批（DP-E55 类）一律不进正式批列表。
+        formal = conn.execute(
+            """SELECT s.sample_code, s.permit_ref, s.status, s.flow_m3h,
+                      s.generation, s.created_at
+               FROM sample_batches s
+               JOIN discharge_permits dp ON dp.permit_code = s.permit_ref
+               WHERE s.outfall_id=? AND s.status != '作废'
+               ORDER BY s.id DESC LIMIT 200""",
             (outfall_id,),
         ).fetchall()
-        return {"outfall": dict(row), "recent_samples": [dict(s) for s in recent]}
+        formal_samples = [dict(s) for s in formal]
+        recent = conn.execute(
+            """SELECT s.sample_code, s.status, s.flow_m3h, s.created_at
+               FROM sample_batches s
+               JOIN discharge_permits dp ON dp.permit_code = s.permit_ref
+               WHERE s.outfall_id=? AND s.status != '作废'
+               ORDER BY s.id DESC LIMIT 10""",
+            (outfall_id,),
+        ).fetchall()
+        return {
+            "outfall": dict(row),
+            "recent_samples": [dict(s) for s in recent],
+            "formal_samples": formal_samples,
+        }
+
+
+@router.get("/api/outfalls/{outfall_id}/formal-samples")
+def list_formal_samples(outfall_id: int, authorization: AuthHeader = None):
+    """排放口页正式批列表：只含有许可册匹配行的批，无许可号剔除。"""
+    require_user(authorization)
+    with connect() as conn:
+        if not conn.execute(
+            "SELECT id FROM outfalls WHERE id=?", (outfall_id,)
+        ).fetchone():
+            raise HTTPException(404, "排放口不存在")
+        rows = conn.execute(
+            """SELECT s.sample_code, s.permit_ref, s.status, s.flow_m3h,
+                      s.generation, s.created_at
+               FROM sample_batches s
+               JOIN discharge_permits dp ON dp.permit_code = s.permit_ref
+               WHERE s.outfall_id=? AND s.status != '作废'
+               ORDER BY s.id DESC LIMIT 200""",
+            (outfall_id,),
+        ).fetchall()
+        return {
+            "items": [dict(r) for r in rows],
+            "rule": "正式批列表与许可册同源：无许可匹配行的批不列入（effluent-05）",
+        }
 
 
 @router.post("/api/outfalls")
